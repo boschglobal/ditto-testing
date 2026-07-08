@@ -58,9 +58,11 @@ services:
 
   connectivity:
     environment:
-      - HONO_CONNECTION_URI="tcp://localhost:9092"
-      - HONO_CONNECTION_BOOTSTRAP_SERVERS="localhost:9092"
-      - HONO_CONNECTION_SASL_MECHANISM="PLAIN"
+      # NO quotes in list-form env entries — they become part of the value and e.g. break
+      # connectivity.conf's `base-uri = ${?HONO_CONNECTION_URI}` URI parsing.
+      - HONO_CONNECTION_URI=tcp://localhost:9092
+      - HONO_CONNECTION_BOOTSTRAP_SERVERS=localhost:9092
+      - HONO_CONNECTION_SASL_MECHANISM=PLAIN
 
   ssh:
     ports:

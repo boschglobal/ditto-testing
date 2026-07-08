@@ -1,8 +1,10 @@
 # System tests: things-search on PostgreSQL + IntelliJ-run Ditto (docker optional)
 
 *Design spec, 2026-07-08. Supersedes the docker-only / search-stays-on-Mongo scope of
-`docs/postgres-system-tests-plan.md` (whose Parts A–D are implemented on this branch and stay in
-place; this spec updates that work for two new facts and one new requirement).*
+`docs/postgres-system-tests-plan.md` (whose Parts A–D are implemented on this branch: Parts A/B and
+the `postgres/{policies,things,connectivity}-postgres.conf` overlays stay as-is, while Part C's
+compose file and scripts are updated by Part 1 below for the three-JAR layout. This spec updates
+that work for two new facts and one new requirement).*
 
 ## Context
 
@@ -19,7 +21,8 @@ Three things changed:
    superset of `feat/postgres-persistance`) implements the search backend in
    `internal/utils/search-r2dbc`, activated by the top-level include
    `classpath("ditto-postgres-search")` (dev twin: `search-pg-dev.conf`; CLI/compose proven via
-   `deployment/postgres-local/run-compound-postgres.sh` and `search-postgres.conf`).
+   `deployment/postgres-local/run-compound-postgres.sh` and
+   `deployment/postgres-local/search-postgres.conf`).
 2. **The single shaded extension JAR is gone.** `ditto-internal-utils-persistence-r2dbc-extension`
    was replaced by a **three-JAR layout** (all `0-SNAPSHOT`, all must come from the same build —
    a boot self-check fails fast on mismatch or on a thin JAR without its base):
@@ -31,8 +34,10 @@ Three things changed:
    | `ditto-postgres-search-extension` (thin) | search-r2dbc classes | things-search, only when search runs on Postgres |
 
    Module dirs: `internal/utils/postgres-{client,persistence,search}-extension`; JARs at
-   `<module>/target/ditto-postgres-<x>-extension-0-SNAPSHOT.jar` (the shaded client JAR, **not**
-   the `original-*` sibling). The current compose mounts and `start-postgres.sh` preflight/build
+   `<module>/target/ditto-postgres-<x>-extension-0-SNAPSHOT.jar` (each module's main shaded JAR —
+   all three run the shade plugin, so mount `ditto-postgres-<x>-extension-*.jar`, **not** its
+   `original-*` sibling; "thin" in the table means no bundled third-party deps, not un-shaded). The
+   current compose mounts and `start-postgres.sh` preflight/build
    reference the deleted module and are therefore broken against the search worktree.
 3. **New requirement: running Ditto in docker must be optional.** The developer workflow is to run
    the Ditto services from IntelliJ (as the existing Mongo-based `intelliJRunConfigurations/*.run.xml`
@@ -42,7 +47,14 @@ Decisions taken with the user:
 
 - **MongoDB stays in the Postgres docker environment; the search backend is selectable**
   (Mongo or Postgres). Selection is a *runtime* concern only — the test suite needs no
-  `search.backend` key because `CleanupIT` is the only DB-direct test and search tests go over HTTP.
+  `search.backend` key because no test does DB-direct *search* access (`CleanupIT`, the only
+  DB-direct test, touches journal/snapshot tables only; search tests go over HTTP). This makes the
+  suite backend-agnostic in *transport*, not backend-*verified*: the existing search IT suite
+  (`QueryThingsWithFilterByEmptyIT`, the `like`/`ilike` and null / three-valued-logic filter ITs,
+  `QueryThingsPagingIT` cursor-over-tied-keys) pins exact RQL result sets and is the real PG-search
+  parity gate — a ditto `search-r2dbc` responsibility (result-set/order/collation parity; collation
+  is already pinned ditto-side via `COLLATE "C"`). The smoke verification below does **not**
+  establish that parity.
 - **`start-postgres.sh` defaults to `SEARCH_BACKEND=postgres`** (full-Postgres stack);
   `SEARCH_BACKEND=mongodb` falls back to the proven persistence-on-PG / search-on-Mongo split.
 - **IntelliJ run configs**: new `"<svc> for test (Postgres)"` variants in
@@ -69,7 +81,9 @@ use it, mirroring ditto's own `.run/*(Postgres).run.xml`.
 
 - Replace the single `persistence-r2dbc-extension` JAR mount in policies/things/connectivity with
   two mounts each: `ditto-postgres-client-extension` + `ditto-postgres-persistence-extension`
-  (paths via `${DITTO_REPO_DIR:-./../../ditto}` as today), still into `/opt/ditto/extensions/`.
+  (paths via `${DITTO_REPO_DIR:-./../../ditto}` as today — the `:-./../../ditto` default is nominal;
+  `DITTO_REPO_DIR` must point at the **search** worktree, which the new preflight enforces), still
+  into `/opt/ditto/extensions/`.
 - `mongodb` service and `docker-compose.env` injection stay exactly as-is (comment updated: Mongo
   is required when `SEARCH_BACKEND=mongodb` and harmless otherwise).
 - Header comment updated (search no longer "stays" on Mongo; it is selectable).
@@ -97,9 +111,15 @@ include classpath("search")                # raw Things-Search service config (e
 include classpath("ditto-postgres-search") # opt-in PG search backend + shared client defaults
 ```
 
-No auto-start-journal narrowing needed — the search service runs no event-sourcing journal; the
-`ditto-postgres-search` include only swaps `ditto.extensions.search-persistence-provider` (mirrors
-`<ditto>/deployment/postgres-local/search-postgres.conf`, whose base is `search-dev` instead).
+No auto-start-journal narrowing needed — the search service runs no event-sourcing journal (it sets
+no `auto-start-journals`); the `ditto-postgres-search` include swaps
+`ditto.extensions.search-persistence-provider` and pulls in the shared `ditto.postgresql.*`
+client/plan/reaper defaults, but — unlike the persistence profile — needs no journal narrowing
+(mirrors `<ditto>/deployment/postgres-local/search-postgres.conf`, whose base is `search-dev`
+instead). **Caveat:** this raw-`classpath("search")` + `HOSTING_ENVIRONMENT=filebased` overlay has
+never booted in a container — it is the exact new analog of the plan-review's F4 caveat for the
+now-proven persistence overlays. Budget iteration time, and make Verification step 1 assert
+things-search actually boots on PG before trusting `QueryThingsIT`.
 
 **`docker/start-postgres.sh` (modify)**
 
@@ -109,8 +129,11 @@ No auto-start-journal narrowing needed — the search service runs no event-sour
 - Build step: replace the single `-pl :ditto-internal-utils-persistence-r2dbc-extension` build with
   `mvn -pl :ditto-postgres-client-extension,:ditto-postgres-persistence-extension,:ditto-postgres-search-extension -am -DskipTests package`
   (one reactor invocation; the search extension is built even under `SEARCH_BACKEND=mongodb` — it
-  is cheap and keeps the script branch-free until compose-file assembly).
-- JAR existence checks for all three shaded JARs.
+  is cheap and keeps the script branch-free until compose-file assembly). `-am` pulls a ~64-module
+  reactor (same magnitude as the old single-extension `-am`), and the client shade makes a real
+  `package` take minutes — so it runs only when `SKIP_IMAGE_BUILD` is unset.
+- JAR existence checks for all three JARs (the shaded client base + the two thin JARs; each is the
+  main `ditto-postgres-<x>-extension-0-SNAPSHOT.jar`, not the `original-*` sibling).
 - `SEARCH_BACKEND="${SEARCH_BACKEND:-postgres}"`; validate it is `postgres` or `mongodb`; when
   `postgres`, append `-f docker-compose-postgres-search.yml` to `COMPOSE_FILES`.
 - Startup order, health-wait, log tailing, container checks unchanged.
@@ -125,6 +148,12 @@ never started is a no-op; this way one stop script tears down either variant).
 **`common/src/main/resources/test-common-local-postgres.conf` (new)**
 
 ```
+# NOTE (carry over from test-common-docker-compose-postgres.conf): config.TestConfig resolves its
+# filename from the TestEnvironment *enum* (local-postgres -> LOCAL -> test-common-local.conf), so
+# the persistence.backend / postgres.* keys below are visible only to CommonTestConfig consumers
+# (which use the raw -Dtest.environment string), NOT to TestConfig consumers. CleanupIT reads them
+# via CommonTestConfig -> PersistenceInspectorFactory, so this is fine — but a future key added
+# here will NOT reach TestConfig.
 include "test-common-local"        # gateway/oauth on localhost, unchanged
 persistence.backend = "postgres"
 postgres {
@@ -133,6 +162,12 @@ postgres {
   user = "ditto"
   password = "ditto"
 }
+# C1: the reused "Gateway for test" run config keeps the Mongo-era DEVOPS_SECURED=true /
+# DEVOPS_PASSWORD=foobar, but test-common-local sets gateway.devops.auth.enabled=false. Without the
+# re-enable below, PiggyBackCommander sends CleanupIT's /devops/piggyback requests unauthenticated
+# and the secured gateway returns 401. (Docker mode instead disables both ends.)
+gateway.devops.auth.enabled = true
+gateway.devops.auth.password = "foobar"
 ```
 
 Selected with `-Dtest.environment=local-postgres`. `TestEnvironment.getForString` already
@@ -143,9 +178,13 @@ change. Config-file resolution follows the existing `test-common-<env>.conf` con
 
 `isLocalOrDockerTestEnvironment()` currently `equalsIgnoreCase`-matches `local` and
 prefix-matches `docker-compose`; change the `local` arm to
-`testEnvironment.startsWith(TEST_ENVIRONMENT_LOCAL)` so `CleanupIT`'s `@RunIf(DockerEnvironment)`
-gate (and `ServiceEnvironment`'s solution/auth setup, same call-site) covers `local-postgres`.
-Same rationale and comment as the existing `docker-compose` prefix fix.
+`testEnvironment.startsWith(TEST_ENVIRONMENT_LOCAL)` so the `@RunIf(DockerEnvironment)` gate covers
+`local-postgres`. This flips **all ~22 `@RunIf(DockerEnvironment)` test classes** (`CleanupIT` plus
+the connectivity/messaging/live-channel/ws suites) from skipped→runnable under `local-postgres` —
+exactly as they already run under plain `local`; desired, and safe (the only two call sites are
+`DockerEnvironment.isSatisfied()` and `ServiceEnvironment`'s solution/auth setup, and no env name
+other than `local-postgres` starts with `local`). Same rationale and comment as the existing
+`docker-compose` prefix fix.
 
 **`intelliJRunConfigurations/` (new files)**
 
@@ -155,7 +194,9 @@ throttling, oauth issuers on Gateway — n/a, see below) **plus**:
 - `HOSTING_ENVIRONMENT=filebased`,
   `HOSTING_ENVIRONMENT_FILE_LOCATION=$PROJECT_DIR$/<svc>/service/src/main/resources/<svc>-pg-dev.conf`
   (`$PROJECT_DIR$` = the *ditto* project these configs are imported into; profiles exist for
-  policies, things, connectivity, search),
+  policies, things, connectivity, search — **but the `<svc>` template does not expand cleanly for
+  search: its path is `thingsearch/service/src/main/resources/search-pg-dev.conf` (dir `thingsearch`,
+  file prefix `search`). Copy ditto's own `.run/SearchService (Postgres).run.xml` verbatim**),
 - `POSTGRES_URI=r2dbc:postgresql://localhost:5432/ditto`, `POSTGRES_USER/PASSWORD=ditto`,
   `POSTGRES_DDL_USER/DDL_PASSWORD=ditto`, `POSTGRES_SSL_MODE=disable`,
 - classpath module `ditto-ide-postgres-launcher` (replaces `ditto-<svc>-service`),
@@ -169,31 +210,42 @@ Files:
    which ThingsSearch config you launch (Mongo sibling vs this one)
 4. `Connectivity for test (Postgres).run.xml`
 5. `Ditto4test (Postgres).run.xml` — Multirun compound: Policies (PG), Things (PG), ThingsSearch
-   (PG), Connectivity (PG), **Gateway for test** (unchanged Mongo-era config, intentionally)
+   (PG), Connectivity (PG), **Gateway for test** (unchanged Mongo-era config, intentionally — it
+   keeps `DEVOPS_SECURED=true`/`DEVOPS_PASSWORD=foobar`). **C1:** because it stays secured,
+   `test-common-local-postgres.conf` must re-enable devops auth with the matching password (done
+   above), or CleanupIT's `/devops/piggyback` calls get 401. The alternative — giving the compound
+   a `DEVOPS_SECURED=false` Gateway leg, like ditto's own `GatewayService (Postgres)` — was rejected
+   to keep the Gateway config genuinely unchanged. (Multirun is a plugin; note it as a prerequisite.)
 6. `Postgres.run.xml` — docker-deploy config mirroring `Mongo.run.xml`: image `postgres:16`,
    container `localPostgres`, port 5432→5432, env `POSTGRES_DB/USER/PASSWORD=ditto`
 
 No changes to the five existing Mongo-era configs.
 
 **Infrastructure for this mode** (documented, not scripted): `postgres` via `Postgres.run.xml` or
-`docker-compose -f docker-compose.yml -f docker-compose-postgres.yml up -d postgres`; `mongodb`
-only when running ThingsSearch on Mongo; `oauth` and brokers exactly as the existing IntelliJ
-section of `README.md` describes. Postgres is published on `localhost:5432` (already the case in
-`docker-compose-postgres.yml`), matching both the run configs' `POSTGRES_URI` and the test env's
-`postgres.jdbc-uri`.
+`docker-compose -f docker-compose.yml -f docker-compose-postgres.yml up -d postgres` — note the
+`postgres` service is defined **only** in `docker-compose-postgres.yml`, so it is *not* part of the
+existing brokers/oauth infra run-config (which uses `docker-compose.yml` + `.override.yml`) and must
+be started separately; `mongodb` only when running ThingsSearch on Mongo; `oauth` and brokers
+exactly as the existing IntelliJ section of `README.md` describes. Postgres is published on
+`localhost:5432` (already the case in `docker-compose-postgres.yml`), matching both the run configs'
+`POSTGRES_URI` and the test env's `postgres.jdbc-uri` — do **not** run ditto's own
+`deployment/postgres-local` stack at the same time, as it also binds host `5432`.
 
 ## Part 3 — Documentation
 
 - **`README.md`**: extend "How to run tests in IntelliJ" with the Postgres flow (start `postgres`
-  container, launch the `(Postgres)` run configs or the `Ditto4test (Postgres)` compound, run
-  tests with `-Dtest.environment=local-postgres`); replace the stale "things-search stays on
-  MongoDB" sentence in the Postgres pointer with the selectable-backend wording and the
-  search-worktree prerequisite.
+  container, launch the `(Postgres)` run configs or the `Ditto4test (Postgres)` compound — which
+  needs the **Multirun** IntelliJ plugin — then run tests with an explicit command, e.g.
+  `mvn verify -am --projects=:system -Dit.test=QueryThingsIT -Dtest.environment=local-postgres`);
+  replace the stale "things-search stays on MongoDB" sentence in the Postgres pointer with the
+  selectable-backend wording and the search-worktree prerequisite.
 - **`docker/README-postgres.md`**: update to the three-JAR layout; document `SEARCH_BACKEND`
   (default `postgres`); update the prerequisite to the **search**-branch worktree
-  (`internal/utils/postgres-persistence-extension` as the marker); add an "IntelliJ mode
-  (docker optional)" section covering infra-only startup, run configs, and `local-postgres`;
-  keep the in-network CI-style instructions for the docker mode.
+  (`internal/utils/postgres-persistence-extension` as the marker); note that search-on-PG requires
+  the DDL role to `CREATE EXTENSION IF NOT EXISTS pg_trgm` at boot (auto-satisfied by the local
+  `ditto` superuser in `postgres:16`; a gotcha against a restricted/managed Postgres); add an
+  "IntelliJ mode (docker optional)" section covering infra-only startup, run configs, and
+  `local-postgres`; keep the in-network CI-style instructions for the docker mode.
 - **`docs/postgres-system-tests-plan.md`**: prepend a superseded-by note pointing here (historic
   content untouched).
 
@@ -212,21 +264,45 @@ section of `README.md` describes. Postgres is published on `localhost:5432` (alr
 Precondition for both: the search worktree built once (`mvn install -DskipTests`) so allinone +
 extension JARs exist; `DITTO_REPO_DIR` pointed at it.
 
+**How to assert a pass (applies to every step below).** `mvn verify` in this repo does **not** fail
+the build on IT failures — `system/pom.xml` binds only failsafe's `integration-test` goal, not the
+`verify` gate, so the process exits 0 whether a test passes, fails, errors, or is `@RunIf`-skipped.
+Read the result from the report, not the exit code:
+`grep -h "Tests run" system/target/failsafe-reports/*.txt` and require
+`Tests run: N, Failures: 0, Errors: 0, Skipped: 0`. **`Skipped: 0` is load-bearing** — a
+`@RunIf(DockerEnvironment)` miss surfaces as a silent skip (assumption violation), so a bare
+"`Tests run` ≥ 1" cannot distinguish "ran and passed" from "gate-skipped".
+
 1. **Docker mode, full-Postgres**: `DITTO_REPO_DIR=<search-worktree> ./start-postgres.sh` (default
    `SEARCH_BACKEND=postgres`) → all containers healthy; policies/things/connectivity/things-search
    logs show the Postgres backend and no missing-plugin errors; `psql \dt` shows journal/snaps
-   *and* the search schema tables. Then, in-network:
-   `mvn verify -am --projects=:system -Dit.test=CleanupIT -Dtest.environment=docker-compose-postgres`
-   (assert `Tests run: 1`, not skipped) plus `-Dit.test=QueryThingsIT` (search CRUD/RQL over the
-   PG search backend).
+   *and* the search schema tables (this + the things-search log is what actually proves the search
+   overlay booted on PG). Then run the tests **in-network** — a host-run `mvn` cannot reach the
+   container-hostname cluster (brokers dial back to the `system-test-container` network-alias), so
+   use the wrapper `docker/README-postgres.md` documents:
+   `docker run --rm --network test --network-alias system-test-container -v "$PWD":/ws -v "$HOME/.m2":/root/.m2 -w /ws maven:3.9-eclipse-temurin-25 mvn verify -am --projects=:system -Dit.test=CleanupIT,QueryThingsIT -Dtest.environment=docker-compose-postgres`
+   (both in one invocation, to avoid two ~64-module `-am` builds; assert per the report block above
+   — `CleanupIT` exercises the already-shipped `docker-compose` arm, `QueryThingsIT` exercises
+   search CRUD/RQL over the PG backend). Then run `./stop-postgres.sh` and assert the stack is gone
+   (`docker compose … ps -q` empty) — **this is the only step that exercises the stop-script
+   change**.
 2. **Docker mode, search fallback** (cheap sanity): restart with `SEARCH_BACKEND=mongodb`; confirm
    things-search boots on Mongo (no PG env/extension mounted) and a created thing is searchable.
-3. **IntelliJ mode (headless equivalent)**: infra containers only (postgres, oauth, brokers);
-   launch the services from the ditto worktree with exactly the run configs' env/classpath (CLI
-   equivalent of the `(Postgres)` configs — the IDE itself cannot be driven headlessly); run
-   `CleanupIT` + `QueryThingsIT` from the host with `-Dtest.environment=local-postgres` (assert
-   `Tests run` ≥ 1). The run configs themselves get a one-click confirmation by the user in
-   IntelliJ.
+3. **IntelliJ mode**: infra containers only (postgres, oauth, brokers). The `.run.xml` files
+   themselves are confirmed by the user with a one-click launch in IntelliJ (the IDE cannot be
+   driven headlessly, and a wrong module ref or env typo in an XML is caught *only* here). For an
+   automated stand-in of the backend wiring, reproduce the run configs' classpath from the launcher
+   module — `mvn -pl :ditto-ide-postgres-launcher dependency:build-classpath
+   -Dmdep.outputFile=cp.txt` in the ditto worktree, then one
+   `java -cp "$(cat cp.txt)" <service-main-class>` per service with the Part-2 env table (the
+   launcher has no main class of its own; each service keeps its own starter). This is a set of
+   separate clustered processes — **not** `run-compound-postgres.sh`, which is a single compound
+   process and only approximates the wiring. Then run
+   `mvn verify -am --projects=:system -Dit.test=CleanupIT,QueryThingsIT -Dtest.environment=local-postgres`
+   from the host and assert per the report block above. **This `CleanupIT` run is the only automated
+   check of the `CommonTestConfig` `local`-arm one-liner** — if it regresses, `CleanupIT` silently
+   gate-skips, so the `Skipped: 0` assertion (not "≥ 1") is what catches it. This step also depends
+   on **C1** (devops auth) being resolved, or `CleanupIT`'s piggyback calls 401.
 
 ## Files to create / modify
 
