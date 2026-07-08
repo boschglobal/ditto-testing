@@ -54,6 +54,38 @@ services after. A launch sequence could look like this:
 Or, simply make use of the [multirun plugin](https://plugins.jetbrains.com/plugin/7248-multirun) for which a 
 [run configuration](intelliJRunConfigurations/Ditto4test.run.xml) also is available.
 
+### Run Ditto on PostgreSQL persistence
+
+Ditto's persistence layer is pluggable, so the system tests can run against a Ditto stack that persists
+things/policies/connectivity to PostgreSQL. things-search's backend is **selectable** (PostgreSQL by
+default, or MongoDB). Both modes need a sibling **ditto search-branch worktree**
+(`internal/utils/postgres-persistence-extension` is the marker) built once with `mvn install -DskipTests`.
+
+**Docker mode (CI-style):** `docker/start-postgres.sh` (default `SEARCH_BACKEND=postgres`; set
+`SEARCH_BACKEND=mongodb` for the persistence-on-PG / search-on-Mongo split) plus the
+`docker-compose-postgres` test environment — see
+[docker/README-postgres.md](docker/README-postgres.md).
+
+**IntelliJ mode (docker optional):** run Ditto from IntelliJ with only infrastructure in docker:
+
+1. Start the `postgres` container (either the `Postgres for test`
+   [run config](intelliJRunConfigurations/Postgres.run.xml), or
+   `docker-compose -f docker-compose.yml -f docker-compose-postgres.yml up -d postgres` from `docker/`),
+   plus `oauth` and the brokers exactly as in the sections above. Start `mongodb` only if you launch
+   ThingsSearch on Mongo. Do **not** also run ditto's own `deployment/postgres-local` stack — it binds
+   the same host `5432`.
+2. Launch the `(Postgres)` run configs (`Policies`, `Things`, `ThingsSearch`, `Connectivity` — all
+   `for test (Postgres)` — plus the unchanged `Gateway for test`), or the
+   [`Ditto for test (Postgres)`](intelliJRunConfigurations/Ditto4test%20%28Postgres%29.run.xml) compound
+   (needs the [Multirun](https://plugins.jetbrains.com/plugin/7248-multirun) plugin). These are imported
+   into the ditto project and put the r2dbc modules on the classpath via the `ditto-ide-postgres-launcher`
+   module. Selecting the search backend in this mode = launching `ThingsSearch for test (Postgres)` vs
+   the Mongo `ThingsSearch for test`.
+3. Run the tests from the host against `-Dtest.environment=local-postgres`, e.g.:
+   ```bash
+   mvn verify -am --projects=:system -Dit.test=QueryThingsIT -Dtest.environment=local-postgres
+   ```
+
 ## Authorization server mock
 
 Tests authenticate themselves via OAuth against a mock server.  

@@ -50,6 +50,14 @@ public class CommonTestConfig {
 
     private static final String PROPERTY_MONGODB_URI = MONGO_PREFIX + "uri";
 
+    private static final String PROPERTY_PERSISTENCE_BACKEND = "persistence.backend";
+    private static final String PERSISTENCE_BACKEND_MONGODB = "mongodb";
+
+    private static final String POSTGRES_PREFIX = "postgres.";
+    private static final String PROPERTY_POSTGRES_JDBC_URI = POSTGRES_PREFIX + "jdbc-uri";
+    private static final String PROPERTY_POSTGRES_USER = POSTGRES_PREFIX + "user";
+    private static final String PROPERTY_POSTGRES_PASSWORD = POSTGRES_PREFIX + "password";
+
     private static final String PROPERTY_GATEWAY_URL = GATEWAY_PREFIX + "url";
     private static final String PROPERTY_GATEWAY_WS_URL = GATEWAY_PREFIX + "ws-url";
     private static final String PROPERTY_GATEWAY_BASIC_AUTH_ENABLED = GATEWAY_PREFIX + "basic-auth.enabled";
@@ -163,6 +171,28 @@ public class CommonTestConfig {
         return conf.getString(PROPERTY_MONGODB_URI);
     }
 
+    /**
+     * Returns the persistence backend Ditto runs against in this test environment, e.g. {@code "mongodb"} (default)
+     * or {@code "postgres"}.
+     *
+     * @return the persistence backend.
+     */
+    public String getPersistenceBackend() {
+        return getStringOrDefault(PROPERTY_PERSISTENCE_BACKEND, PERSISTENCE_BACKEND_MONGODB);
+    }
+
+    public String getPostgresJdbcUri() {
+        return conf.getString(PROPERTY_POSTGRES_JDBC_URI);
+    }
+
+    public String getPostgresUser() {
+        return conf.getString(PROPERTY_POSTGRES_USER);
+    }
+
+    public String getPostgresPassword() {
+        return conf.getString(PROPERTY_POSTGRES_PASSWORD);
+    }
+
     public String getGatewayUrl(final String subUrl) {
         return concatUrl(getGatewayBaseUrl(), subUrl);
     }
@@ -218,8 +248,10 @@ public class CommonTestConfig {
     }
 
     public boolean isLocalOrDockerTestEnvironment() {
-        return TEST_ENVIRONMENT_LOCAL.equalsIgnoreCase(testEnvironment)
-                || TEST_ENVIRONMENT_DOCKER_COMPOSE.equalsIgnoreCase(testEnvironment);
+        // prefix-match mirrors TestEnvironment.getForString: suffixed variants like "docker-compose-postgres"
+        // and "local-postgres" are docker-compose / local environments, too
+        return testEnvironment.startsWith(TEST_ENVIRONMENT_LOCAL)
+                || testEnvironment.startsWith(TEST_ENVIRONMENT_DOCKER_COMPOSE);
     }
 
     public Optional<List<JsonSchemaVersion>> getSearchVersions() {
