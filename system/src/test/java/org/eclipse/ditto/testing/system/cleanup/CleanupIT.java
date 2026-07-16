@@ -235,31 +235,29 @@ public final class CleanupIT extends IntegrationTest {
     }
 
     private static String createConnectionWithAdditionalEvents(final boolean open, final int amountOfAdditionalEvents) {
-        final String username = serviceEnv.getDefaultAuthUsername();
-        final String secret = serviceEnv.getDefaultTestingContext()
-                .getSolution()
-                .getSecret();
         final JsonObject closedConnection = TestConstants.Connections.buildConnection();
         final JsonObject finalConnection = closedConnection.toBuilder()
                 .set(Connection.JsonFields.CONNECTION_STATUS, open ? "open" : "closed")
                 .build();
 
+        // /api/2/connections is devops-gated in the gateway (ConnectionsRoute), not solution-auth-gated;
+        // use devops auth like RestConnectionsIT does instead of the solution basic-auth credentials.
         final String connectionId = parseIdFromResponse(connectionsClient()
                 .postConnection(closedConnection)
                 .withHeader(HttpHeader.TIMEOUT, 60)
-                .withBasicAuth(username, secret, true)
+                .withDevopsAuth()
                 .expectingHttpStatus(HttpStatus.CREATED)
                 .fire());
 
         repeat(amountOfAdditionalEvents, i -> connectionsClient()
                 .putConnection(connectionId, closedConnection)
-                .withBasicAuth(username, secret, true)
+                .withDevopsAuth()
                 .expectingHttpStatus(HttpStatus.NO_CONTENT)
                 .fire());
 
         connectionsClient()
                 .putConnection(connectionId, finalConnection)
-                .withBasicAuth(username, secret, true)
+                .withDevopsAuth()
                 .expectingHttpStatus(open ? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.NO_CONTENT)
                 .fire();
 
