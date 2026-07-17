@@ -15,6 +15,7 @@ package org.eclipse.ditto.testing.system.connectivity.rest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.eclipse.ditto.testing.common.TestConstants.API_V_2;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
@@ -43,6 +44,7 @@ import org.eclipse.ditto.connectivity.model.Topic;
 import org.eclipse.ditto.connectivity.model.UserPasswordCredentials;
 import org.eclipse.ditto.connectivity.model.signals.commands.query.RetrieveConnectionLogsResponse;
 import org.eclipse.ditto.json.JsonArray;
+import org.eclipse.ditto.json.JsonCollectors;
 import org.eclipse.ditto.json.JsonFactory;
 import org.eclipse.ditto.json.JsonObject;
 import org.eclipse.ditto.json.JsonValue;
@@ -365,6 +367,125 @@ public final class RestConnectionsIT extends IntegrationTest {
                 .fire();
     }
 
+    @Test
+    public void createConnectionWithUnknownPipelineFunctionInTargetTopicFilterFails() {
+        // WHEN the target topic filter references an unknown pipeline function
+        final JsonObject connection = connectionWithTargetTopics(
+                "_/_/things/twin/events?filter=fn:unknownfn('x')");
+
+        // THEN connection creation is rejected as invalid connection configuration
+        connectionsClient()
+                .postConnection(connection)
+                .withDevopsAuth()
+                .expectingHttpStatus(HttpStatus.BAD_REQUEST)
+                .expectingErrorCode("connectivity:connection.configuration.invalid")
+                .fire();
+    }
+
+    @Test
+    public void createConnectionWithMalformedRqlHeadInCombinedTargetTopicFilterFails() {
+        // WHEN the RQL head of a combined <rql>|fn:... target topic filter is malformed
+        // (the pipeline part itself is valid and is validated first - the RQL head must still be rejected)
+        final JsonObject connection = connectionWithTargetTopics(
+                "_/_/things/twin/events?filter=gt(attributes/x,)|fn:filter(header:x,'exists')");
+
+        connectionsClient()
+                .postConnection(connection)
+                .withDevopsAuth()
+                .expectingHttpStatus(HttpStatus.BAD_REQUEST)
+                .expectingErrorCode("rql.expression.invalid")
+                .fire();
+    }
+
+    @Test
+    public void createConnectionWithWhitespaceOnlyTargetTopicFilterFails() {
+        // WHEN the target topic filter is whitespace-only
+        // (%20%20 is url-decoded to two spaces by FilteredTopic parsing and must be rejected exactly as an
+        // empty filter was rejected before target topic pipeline filters existed)
+        final JsonObject connection = connectionWithTargetTopics(
+                "_/_/things/twin/events?filter=%20%20");
+
+        connectionsClient()
+                .postConnection(connection)
+                .withDevopsAuth()
+                .expectingHttpStatus(HttpStatus.BAD_REQUEST)
+                .expectingErrorCode("rql.expression.invalid")
+                .fire();
+    }
+
+    @Test
+    public void createConnectionWithValidPipelineTargetTopicFilters() {
+        // WHEN a connection defines pure-pipeline and combined target topic filters -
+        // including an unknown rqlFunction NAME ('nope'), which is accepted at creation time
+        // (documented behavior; it simply never matches at runtime)
+        final JsonObject connection = connectionWithTargetTopics(
+                "_/_/things/twin/events?filter=fn:filter(header:ditto-originator,'ne','integration:some:excluded')",
+                "_/_/things/live/messages?filter=gt(attributes/counter,42)" +
+                        "|fn:filter(header:ditto-originator,'ne','integration:some:excluded')",
+                "_/_/things/live/events?filter=fn:filter(header:ditto-originator,'nope','integration:some:excluded')");
+
+        // THEN the connection is created
+        final String connectionId = parseIdFromResponse(connectionsClient()
+                .postConnection(connection)
+                .withDevopsAuth()
+                .expectingHttpStatus(HttpStatus.CREATED)
+                .fire());
+
+        // AND the filters survive the round-trip
+        try {
+            connectionsClient().getConnection(connectionId)
+                    .withDevopsAuth()
+                    .expectingHttpStatus(HttpStatus.OK)
+                    .expectingBody(satisfies(jsonString -> {
+                        assertThat(String.valueOf(jsonString))
+                                .contains("fn:filter(header:ditto-originator,'ne','integration:some:excluded')");
+                        assertThat(String.valueOf(jsonString))
+                                .contains("gt(attributes/counter,42)|fn:filter(header:ditto-originator,'ne'");
+                        assertThat(String.valueOf(jsonString))
+                                .contains("fn:filter(header:ditto-originator,'nope'");
+                    }))
+                    .fire();
+        } finally {
+            // cleanup - also on assertion failure, so the connection never leaks
+            connectionsClient().deleteConnection(connectionId)
+                    .withDevopsAuth()
+                    .expectingHttpStatus(HttpStatus.NO_CONTENT)
+                    .fire();
+        }
+    }
+
+    @Test
+    public void modifyConnectionRevalidatesPipelineTargetTopicFilters() {
+        // GIVEN the existing default connection (created in @Before, deleted in @After)
+        final JsonObject existingConnection = JsonObject.of(connectionsClient()
+                .getConnection(defaultConnectionId)
+                .withDevopsAuth()
+                .expectingHttpStatus(HttpStatus.OK)
+                .fire()
+                .getBody()
+                .asString());
+
+        // WHEN it is modified with a target topic filter referencing an unknown pipeline function
+        // THEN the modification is rejected exactly like creation (modify runs the same ConnectionValidator)
+        connectionsClient()
+                .putConnection(defaultConnectionId.toString(), withTargetTopics(existingConnection,
+                        "_/_/things/twin/events?filter=fn:unknownfn('x')"))
+                .withDevopsAuth()
+                .expectingHttpStatus(HttpStatus.BAD_REQUEST)
+                .expectingErrorCode("connectivity:connection.configuration.invalid")
+                .fire();
+
+        // AND WHEN it is modified with a valid pipeline target topic filter
+        // THEN the modification succeeds
+        connectionsClient()
+                .putConnection(defaultConnectionId.toString(), withTargetTopics(existingConnection,
+                        "_/_/things/twin/events" +
+                                "?filter=fn:filter(header:ditto-originator,'ne','integration:some:excluded')"))
+                .withDevopsAuth()
+                .expectingHttpStatus(HttpStatus.NO_CONTENT)
+                .fire();
+    }
+
     private void assertLogsNotEnabled() {
         final RetrieveConnectionLogsResponse logsResponse = retrieveLogs();
 
@@ -451,6 +572,33 @@ public final class RestConnectionsIT extends IntegrationTest {
                 .set("status", 200)
                 .build();
         return RetrieveConnectionLogsResponse.fromJson(responseWithType, DittoHeaders.empty());
+    }
+
+    private static JsonObject connectionWithTargetTopics(final String... topics) {
+        return TestConstants.Connections.buildConnection().toBuilder()
+                .set(Connection.JsonFields.TARGETS, JsonArray.of(JsonObject.newBuilder()
+                        .set(Target.JsonFields.ADDRESS, "amqp/target1")
+                        .set(Target.JsonFields.TOPICS, Arrays.stream(topics)
+                                .map(JsonValue::of)
+                                .collect(JsonCollectors.valuesToArray()))
+                        .set(Target.JsonFields.AUTHORIZATION_CONTEXT,
+                                JsonArray.of(JsonValue.of("integration:" +
+                                        testingContext.getSolution().getUsername() + ":" +
+                                        TestingContext.DEFAULT_SCOPE)))
+                        .build()))
+                .build();
+    }
+
+    private static JsonObject withTargetTopics(final JsonObject connection, final String... topics) {
+        final JsonArray topicsArray = Arrays.stream(topics)
+                .map(JsonValue::of)
+                .collect(JsonCollectors.valuesToArray());
+        final JsonArray targetsWithTopics = connection.getValue(Connection.JsonFields.TARGETS)
+                .orElseThrow(() -> new AssertionError("connection has no targets: " + connection))
+                .stream()
+                .map(target -> (JsonValue) target.asObject().set(Target.JsonFields.TOPICS, topicsArray))
+                .collect(JsonCollectors.valuesToArray());
+        return connection.set(Connection.JsonFields.TARGETS, targetsWithTopics);
     }
 
 }

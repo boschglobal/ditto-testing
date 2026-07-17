@@ -116,6 +116,10 @@ public final class ConnectivityFactory {
     public final String connectionWithConnectionAnnouncements;
     public final String connectionWith2Sources;
     public final String connectionHonoName;
+    public final String connectionNameWithPipelineFilter;
+    public final String connectionNameWithCombinedRqlAndPipelineFilter;
+    public final String connectionNameWithExtraFieldsAndPipelineFilter;
+    public final String connectionNameWithOriginPipelineFilter;
 
     private ConnectivityFactory(
             final String connectionNamePrefix,
@@ -161,6 +165,10 @@ public final class ConnectivityFactory {
             connectionWithConnectionAnnouncements = disambiguateConnectionName(username, connectionNamePrefix + 13);
             connectionWith2Sources = disambiguateConnectionName(username, connectionNamePrefix + 14);
             connectionHonoName = disambiguateConnectionName(username, connectionNamePrefix + 15);
+            connectionNameWithPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 16);
+            connectionNameWithCombinedRqlAndPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 17);
+            connectionNameWithExtraFieldsAndPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 18);
+            connectionNameWithOriginPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 19);
         } else {
             connectionName1 = null;
             connectionName2 = null;
@@ -177,6 +185,10 @@ public final class ConnectivityFactory {
             connectionWithConnectionAnnouncements = null;
             connectionWith2Sources = null;
             connectionHonoName = null;
+            connectionNameWithPipelineFilter = null;
+            connectionNameWithCombinedRqlAndPipelineFilter = null;
+            connectionNameWithExtraFieldsAndPipelineFilter = null;
+            connectionNameWithOriginPipelineFilter = null;
         }
     }
 
@@ -227,6 +239,10 @@ public final class ConnectivityFactory {
             connectionWithConnectionAnnouncements = disambiguateConnectionName(username, connectionNamePrefix + 13);
             connectionWith2Sources = disambiguateConnectionName(username, connectionNamePrefix + 14);
             connectionHonoName = disambiguateConnectionName(username, connectionNamePrefix + 15);
+            connectionNameWithPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 16);
+            connectionNameWithCombinedRqlAndPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 17);
+            connectionNameWithExtraFieldsAndPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 18);
+            connectionNameWithOriginPipelineFilter = disambiguateConnectionName(username, connectionNamePrefix + 19);
         } else {
             connectionName1 = cf.connectionName1;
             connectionName2 = cf.connectionName2;
@@ -243,6 +259,10 @@ public final class ConnectivityFactory {
             connectionWithConnectionAnnouncements = cf.connectionWithConnectionAnnouncements;
             connectionWith2Sources = cf.connectionWith2Sources;
             connectionHonoName = cf.connectionHonoName;
+            connectionNameWithPipelineFilter = cf.connectionNameWithPipelineFilter;
+            connectionNameWithCombinedRqlAndPipelineFilter = cf.connectionNameWithCombinedRqlAndPipelineFilter;
+            connectionNameWithExtraFieldsAndPipelineFilter = cf.connectionNameWithExtraFieldsAndPipelineFilter;
+            connectionNameWithOriginPipelineFilter = cf.connectionNameWithOriginPipelineFilter;
         }
         this.maxClientCount = maxClientCount;
     }
@@ -284,6 +304,10 @@ public final class ConnectivityFactory {
             case CONNECTION_WITH_CONNECTION_ANNOUNCEMENTS -> connectionWithConnectionAnnouncements;
             case CONNECTION_WITH_2_SOURCES -> connectionWith2Sources;
             case CONNECTION_HONO -> connectionHonoName;
+            case CONNECTION_WITH_PIPELINE_FILTER -> connectionNameWithPipelineFilter;
+            case CONNECTION_WITH_COMBINED_RQL_AND_PIPELINE_FILTER -> connectionNameWithCombinedRqlAndPipelineFilter;
+            case CONNECTION_WITH_EXTRA_FIELDS_AND_PIPELINE_FILTER -> connectionNameWithExtraFieldsAndPipelineFilter;
+            case CONNECTION_WITH_ORIGIN_PIPELINE_FILTER -> connectionNameWithOriginPipelineFilter;
             case NONE -> "noname";
         };
     }
@@ -305,7 +329,11 @@ public final class ConnectivityFactory {
                                 connectionWithTunnel,
                                 connectionWithConnectionAnnouncements,
                                 connectionWith2Sources,
-                                connectionHonoName
+                                connectionHonoName,
+                                connectionNameWithPipelineFilter,
+                                connectionNameWithCombinedRqlAndPipelineFilter,
+                                connectionNameWithExtraFieldsAndPipelineFilter,
+                                connectionNameWithOriginPipelineFilter
                         },
                         extraNames)
                 .flatMap(Arrays::stream)
@@ -423,6 +451,21 @@ public final class ConnectivityFactory {
                                 getEnforcement.get(connectionNameWithEnforcementEnabled))),
                 entry(ConnectionCategory.CONNECTION_WITH_EXTRA_FIELDS,
                         () -> setupSingleConnectionWithExtraFields(connectionNameWithExtraFields)),
+                entry(ConnectionCategory.CONNECTION_WITH_PIPELINE_FILTER,
+                        () -> setupSingleConnectionWithPipelineFilter(connectionNameWithPipelineFilter,
+                                "integration:" + username + ":" + connectionName1)),
+                entry(ConnectionCategory.CONNECTION_WITH_COMBINED_RQL_AND_PIPELINE_FILTER,
+                        () -> setupSingleConnectionWithCombinedRqlAndPipelineFilter(
+                                connectionNameWithCombinedRqlAndPipelineFilter,
+                                "integration:" + username + ":" + connectionName1)),
+                entry(ConnectionCategory.CONNECTION_WITH_EXTRA_FIELDS_AND_PIPELINE_FILTER,
+                        () -> setupSingleConnectionWithExtraFieldsAndPipelineFilter(
+                                connectionNameWithExtraFieldsAndPipelineFilter,
+                                "integration:" + username + ":" + connectionName1)),
+                entry(ConnectionCategory.CONNECTION_WITH_ORIGIN_PIPELINE_FILTER,
+                        () -> setupSingleConnectionWithOriginPipelineFilter(connectionNameWithOriginPipelineFilter,
+                                // in these tests a connection's ID equals its name (see buildOpenedConnection)
+                                connectionName1)),
                 entry(ConnectionCategory.CONNECTION_WITH_HEADER_MAPPING,
                         () -> setupSingleConnectionWithHeaderMapping(connectionNameWithHeaderMapping)),
                 entry(ConnectionCategory.CONNECTION_WITH_RAW_MESSAGE_MAPPER_1,
@@ -629,6 +672,97 @@ public final class ConnectivityFactory {
                         "_/_/things/live/commands?extraFields=" + extraFields + "&filter=eq(attributes/counter,20)",
                         "_/_/things/live/events?extraFields=" + extraFields +
                                 "&filter=and(eq(attributes/counter,20),eq(attributes/filter,true))"
+                )
+        );
+    }
+
+    public Connection setupSingleConnectionWithPipelineFilter(final String connectionId,
+            final String excludedOriginatorSubject) {
+
+        LOGGER.info("Creating a connection of type <{}> with pipeline target topic filter with ID <{}> to <{}> in " +
+                "Ditto Connectivity", connectionType, connectionId, getConnectionUri());
+
+        final String pipelineFilter =
+                "fn:filter(header:ditto-originator,'ne','" + excludedOriginatorSubject + "')";
+        return modelBuilder.buildConnectionModelWithTargetTopics(
+                solutionSupplier.getSolution().getUsername(),
+                connectionId,
+                connectionType,
+                getConnectionUri(),
+                getSpecificConfig(),
+                defaultSourceAddress(connectionId),
+                defaultTargetAddress(connectionId),
+                Arrays.asList(
+                        "_/_/things/twin/events?filter=" + pipelineFilter,
+                        "_/_/things/live/messages?filter=" + pipelineFilter
+                )
+        );
+    }
+
+    public Connection setupSingleConnectionWithCombinedRqlAndPipelineFilter(final String connectionId,
+            final String excludedOriginatorSubject) {
+
+        LOGGER.info("Creating a connection of type <{}> with combined RQL and pipeline target topic filter with " +
+                "ID <{}> to <{}> in Ditto Connectivity", connectionType, connectionId, getConnectionUri());
+
+        return modelBuilder.buildConnectionModelWithTargetTopics(
+                solutionSupplier.getSolution().getUsername(),
+                connectionId,
+                connectionType,
+                getConnectionUri(),
+                getSpecificConfig(),
+                defaultSourceAddress(connectionId),
+                defaultTargetAddress(connectionId),
+                Collections.singletonList(
+                        "_/_/things/twin/events?filter=gt(attributes/counter,42)" +
+                                "|fn:filter(header:ditto-originator,'ne','" + excludedOriginatorSubject + "')"
+                )
+        );
+    }
+
+    public Connection setupSingleConnectionWithExtraFieldsAndPipelineFilter(final String connectionId,
+            final String excludedOriginatorSubject) {
+
+        LOGGER.info("Creating a connection of type <{}> with extra fields and pipeline target topic filter with " +
+                "ID <{}> to <{}> in Ditto Connectivity", connectionType, connectionId, getConnectionUri());
+
+        return modelBuilder.buildConnectionModelWithTargetTopics(
+                solutionSupplier.getSolution().getUsername(),
+                connectionId,
+                connectionType,
+                getConnectionUri(),
+                getSpecificConfig(),
+                defaultSourceAddress(connectionId),
+                defaultTargetAddress(connectionId),
+                Collections.singletonList(
+                        "_/_/things/twin/events?extraFields=attributes/counter" +
+                                "&filter=fn:filter(header:ditto-originator,'ne','" + excludedOriginatorSubject + "')"
+                )
+        );
+    }
+
+    public Connection setupSingleConnectionWithOriginPipelineFilter(final String connectionId,
+            final String causingConnectionId) {
+
+        LOGGER.info("Creating a connection of type <{}> with ditto-origin pipeline target topic filter with " +
+                "ID <{}> to <{}> in Ditto Connectivity", connectionType, connectionId, getConnectionUri());
+
+        return modelBuilder.buildConnectionModelWithTargetTopics(
+                solutionSupplier.getSolution().getUsername(),
+                connectionId,
+                connectionType,
+                getConnectionUri(),
+                getSpecificConfig(),
+                defaultSourceAddress(connectionId),
+                defaultTargetAddress(connectionId),
+                Arrays.asList(
+                        // 'eq': only events CAUSED via the given connection are published;
+                        //       ditto-origin is ABSENT for HTTP/WS-triggered changes -> suppressed
+                        "_/_/things/twin/events?filter=fn:filter(header:ditto-origin,'eq','" +
+                                causingConnectionId + "')",
+                        // 'ne' ("ne trap"): an ABSENT ditto-origin resolves -> HTTP-sent live messages are published
+                        "_/_/things/live/messages?filter=fn:filter(header:ditto-origin,'ne','" +
+                                causingConnectionId + "')"
                 )
         );
     }
