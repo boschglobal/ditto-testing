@@ -12,7 +12,7 @@
 > and per-topic-anchored round-trip assertions), stale scenario-B comments. `ConnectivityFactory` unchanged
 > (its RQL+fn: two-param topic is valid under both revisions). Runtime scenarios A–E2 unchanged.
 
-**Date:** 2026-07-17 · **Branch:** `feature/target-topic-pipeline-filter` (ditto-testing) · **Commits:** `d862134..7e7682e` (6) + uncommitted review fixes (see below) · **Status:** REDESIGNED 2026-07-31, re-verified same day: RestConnectionsIT 8/8, Amqp10ConnectivityIT 6/6 against ditto `5bc389eb2e` (see evidence section below). NOT pushed.
+**Date:** 2026-07-17 · **Branch:** `feature/target-topic-pipeline-filter` (ditto-testing) · **Commits:** `d862134..adc961c` — rev-1: `761eed2` + `6c94457` (per-task shas in the table below are historical, pre-squash; the 2026-07-17 "review fixes" are long since committed); rev-2: `7eb7c7a` + evidence `adc961c` · **Status:** REDESIGNED 2026-07-31, re-verified same day: RestConnectionsIT 8/8, Amqp10ConnectivityIT 6/6 against ditto `5bc389eb2e` (see evidence section below). NOT pushed.
 
 Companion to the feature in the main ditto repo (same-named branch, commits `b369d86bd4..26f68dd19f`, spec `docs/superpowers/specs/2026-07-14-target-topic-pipeline-filter-plan.md` there). Execution plan + full task briefs/reports/review packages: `.superpowers/sdd/` in this worktree (ledger: `progress.md`); the master plan file was `~/.claude/plans/for-the-feature-implementedf-memoized-acorn.md`.
 
@@ -98,3 +98,4 @@ The main repo added (same day) a user-visible connection-log FAILURE entry whene
 5. Review M-6: the six near-identical 20-line DEFAULT/RESTRICTED policy blocks in `AbstractConnectivityITestCases` could share a small `policyWithRestrictedReader(reader, writers...)` helper (~100 lines; `putPolicyForThing` cannot be reused — it grants WRITE to all subjects, the tests deliberately keep the observing target read-only).
 
 Final whole-branch review verdict: **Ready** (0 Critical / 0 Important). Every filter string, suppress/deliver outcome, and error code was cross-verified against `TargetTopicFilter`, `SignalFilter`, `OutboundMappingProcessorActor`, `ConnectionValidator`, `PipelineFunctionFilter`, `ImmutableFilteredTopic` in the main repo.
+2. (2026-07-31 final review, optional) Main-repo `TargetTopicFilterTest`: add a rejection test for a bare placeholder mid-pipeline (`fn:filter(header:a,'exists')|header:foo`) to pin the docs' restrictions bullet to code, and optionally one for an empty middle stage (`fn:a||fn:b`). Enforcement lives in the untouched placeholders module; behavior verified correct in review.
