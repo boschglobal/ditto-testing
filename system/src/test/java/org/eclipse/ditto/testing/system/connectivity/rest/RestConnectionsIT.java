@@ -414,11 +414,11 @@ public final class RestConnectionsIT extends IntegrationTest {
     }
 
     @Test
-    public void createConnectionWithMultiStagePipelineTargetTopicFilterParamFails() {
-        // WHEN an fn: filter param chains two stages with '|' (exactly one stage per param is allowed -
-        // several pipeline conditions must be split into separate filter params instead)
+    public void createConnectionWithTwoPipelineTargetTopicFilterParamsFails() {
+        // WHEN a topic declares two fn: filter params (at most one is allowed - several pipeline conditions
+        // must be chained with '|' inside the single fn: param instead)
         final JsonObject connection = connectionWithTargetTopics(
-                "_/_/things/twin/events?filter=fn:filter(header:x,'exists')|fn:filter(header:y,'exists')");
+                "_/_/things/twin/events?filter=fn:filter(header:x,'exists')&filter=fn:filter(header:y,'exists')");
 
         connectionsClient()
                 .postConnection(connection)
@@ -462,11 +462,13 @@ public final class RestConnectionsIT extends IntegrationTest {
 
     @Test
     public void createConnectionWithValidPipelineTargetTopicFilters() {
-        // WHEN a connection defines pure-pipeline and RQL-plus-pipeline target topic filter params -
-        // including an unknown rqlFunction NAME ('nope'), which is accepted at creation time
+        // WHEN a connection defines pure-pipeline, chained-pipeline and RQL-plus-pipeline target topic filter
+        // params - including an unknown rqlFunction NAME ('nope'), which is accepted at creation time
         // (documented behavior; it simply never matches at runtime)
         final JsonObject connection = connectionWithTargetTopics(
                 "_/_/things/twin/events?filter=fn:filter(header:ditto-originator,'ne','integration:some:excluded')",
+                "_/_/things/twin/events?filter=fn:filter(header:ditto-origin,'ne','chained-excluded-connection')" +
+                        "|fn:filter(header:ditto-originator,'exists')",
                 "_/_/things/live/messages?filter=gt(attributes/counter,42)" +
                         "&filter=fn:filter(header:ditto-originator,'ne','integration:some:excluded')",
                 "_/_/things/live/events?filter=fn:filter(header:ditto-originator,'nope','integration:some:excluded')");
@@ -485,7 +487,11 @@ public final class RestConnectionsIT extends IntegrationTest {
                     .expectingHttpStatus(HttpStatus.OK)
                     .expectingBody(satisfies(jsonString -> {
                         assertThat(String.valueOf(jsonString))
-                                .contains("fn:filter(header:ditto-originator,'ne','integration:some:excluded')");
+                                .contains("twin/events?filter=fn:filter(header:ditto-originator,'ne'," +
+                                        "'integration:some:excluded')");
+                        assertThat(String.valueOf(jsonString))
+                                .contains("fn:filter(header:ditto-origin,'ne','chained-excluded-connection')" +
+                                        "|fn:filter(header:ditto-originator,'exists')");
                         assertThat(String.valueOf(jsonString))
                                 .contains("gt(attributes/counter,42)&filter=fn:filter(header:ditto-originator,'ne'");
                         assertThat(String.valueOf(jsonString))

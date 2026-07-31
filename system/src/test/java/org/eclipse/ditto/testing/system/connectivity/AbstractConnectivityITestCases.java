@@ -1118,7 +1118,7 @@ public abstract class AbstractConnectivityITestCases<C, M> extends
                 createDittoHeaders(correlationId)));
         waitMillis(500);
 
-        // (counter=10 <= 42, other originator connection2) -> suppressed by the RQL head
+        // (counter=10 <= 42, other originator connection2) -> suppressed by the RQL filter param
         sendSignal(cf.connectionName2, ModifyAttribute.of(thingId, counterPointer, JsonValue.of(10),
                 createDittoHeaders(correlationId)));
         waitShort();
@@ -1142,7 +1142,7 @@ public abstract class AbstractConnectivityITestCases<C, M> extends
 
         final M unexpected = consumeFromTarget(cf.connectionNameWithCombinedRqlAndPipelineFilter, eventConsumer);
         assertThat(unexpected)
-                .describedAs("events failing the RQL head or the pipeline stage must be suppressed")
+                .describedAs("events failing the RQL filter param or the pipeline filter param must be suppressed")
                 .isNull();
     }
 
