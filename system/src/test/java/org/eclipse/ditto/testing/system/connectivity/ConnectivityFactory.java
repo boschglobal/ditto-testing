@@ -702,7 +702,7 @@ public final class ConnectivityFactory {
     public Connection setupSingleConnectionWithCombinedRqlAndPipelineFilter(final String connectionId,
             final String excludedOriginatorSubject) {
 
-        LOGGER.info("Creating a connection of type <{}> with combined RQL and pipeline target topic filter with " +
+        LOGGER.info("Creating a connection of type <{}> with RQL and pipeline target topic filter params with " +
                 "ID <{}> to <{}> in Ditto Connectivity", connectionType, connectionId, getConnectionUri());
 
         return modelBuilder.buildConnectionModelWithTargetTopics(
@@ -715,7 +715,7 @@ public final class ConnectivityFactory {
                 defaultTargetAddress(connectionId),
                 Collections.singletonList(
                         "_/_/things/twin/events?filter=gt(attributes/counter,42)" +
-                                "|fn:filter(header:ditto-originator,'ne','" + excludedOriginatorSubject + "')"
+                                "&filter=fn:filter(header:ditto-originator,'ne','" + excludedOriginatorSubject + "')"
                 )
         );
     }

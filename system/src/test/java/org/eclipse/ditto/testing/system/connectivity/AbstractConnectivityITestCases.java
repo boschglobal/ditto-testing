@@ -1078,8 +1078,8 @@ public abstract class AbstractConnectivityITestCases<C, M> extends
     public void sendCommandsConsumeEventsFilteredByCombinedRqlAndPipelineFilter() {
 
         // Given
-        // the twin-events topic filter of connectionNameWithCombinedRqlAndPipelineFilter is:
-        //   ?filter=gt(attributes/counter,42)|fn:filter(header:ditto-originator,'ne','<subject-of-connection1>')
+        // the twin-events topic filters of connectionNameWithCombinedRqlAndPipelineFilter are:
+        //   ?filter=gt(attributes/counter,42)&filter=fn:filter(header:ditto-originator,'ne','<subject-of-connection1>')
         // combined with AND semantics: counter > 42 AND not caused via connection1
         final Policy policy = Policy.newBuilder()
                 .forLabel("DEFAULT")
