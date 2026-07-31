@@ -12,7 +12,7 @@
 > and per-topic-anchored round-trip assertions), stale scenario-B comments. `ConnectivityFactory` unchanged
 > (its RQL+fn: two-param topic is valid under both revisions). Runtime scenarios A–E2 unchanged.
 
-**Date:** 2026-07-17 · **Branch:** `feature/target-topic-pipeline-filter` (ditto-testing) · **Commits:** `d862134..adc961c` — rev-1: `761eed2` + `6c94457` (per-task shas in the table below are historical, pre-squash; the 2026-07-17 "review fixes" are long since committed); rev-2: `7eb7c7a` + evidence `adc961c` · **Status:** REDESIGNED 2026-07-31, re-verified same day: RestConnectionsIT 8/8, Amqp10ConnectivityIT 6/6 against ditto `5bc389eb2e` (see evidence section below). NOT pushed.
+**Date:** 2026-07-17 · **Branch:** `feature/target-topic-pipeline-filter` (ditto-testing) · **Commits:** `d862134..adc961c` — rev-1: `761eed2` + `6c94457` (per-task shas in the table below are historical, pre-squash; the 2026-07-17 "review fixes" are long since committed); rev-2: `7eb7c7a` + evidence `adc961c` · **Status:** REDESIGNED 2026-07-31, re-verified same day: RestConnectionsIT 8/8, Amqp10ConnectivityIT 6/6 against ditto `9ad6669a1c` (see evidence section below). NOT pushed.
 
 Companion to the feature in the main ditto repo (same-named branch, commits `b369d86bd4..26f68dd19f`, spec `docs/superpowers/specs/2026-07-14-target-topic-pipeline-filter-plan.md` there). Execution plan + full task briefs/reports/review packages: `.superpowers/sdd/` in this worktree (ledger: `progress.md`); the master plan file was `~/.claude/plans/for-the-feature-implementedf-memoized-acorn.md`.
 
@@ -30,7 +30,7 @@ All six runtime tests: `@Category(RequireSource.class)` → HttpPush suites skip
 
 ## Verification evidence (2026-07-31, chained-pipeline redesign)
 
-Stack: host-run IntelliJ Ditto rebuilt from main-repo `5bc389eb2e` (redesign commits `3e77a937`..`de22a484` + Java-8-compat fix `5bc389eb2e`), dockerized brokers/oauth via `docker compose ... up -d artemis mqtt kafka rabbitmq oauth ssh`. Testing-repo commit under test: `7eb7c7a`.
+Stack: host-run IntelliJ Ditto rebuilt from the main repo's redesign work, since squashed into `9ad6669a1c` (byte-identical tree `d167b4c35a` — the exact content the stack was built from), dockerized brokers/oauth via `docker compose ... up -d artemis mqtt kafka rabbitmq oauth ssh`. Testing-repo commit under test: `7eb7c7a`.
 
 Freshness probes (dry-run `POST /api/2/connections?dry-run=true`, devops auth): two-`fn:`-params topic → 400 `connectivity:connection.configuration.invalid` "declares 2 pipeline 'filter' parameters - at most one pipeline filter is allowed per topic" (NEW build; the rev-1 build accepted this form); chained `fn:filter(...)|fn:filter(...)` topic → HTTP 200 (rev-1 build rejected it with "exactly one 'fn:' stage").
 
