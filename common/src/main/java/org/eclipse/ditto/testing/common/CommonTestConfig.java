@@ -117,7 +117,10 @@ public class CommonTestConfig {
         LOG.info("Running against test environment: {}", testEnvironment);
 
         final String envSpecificBaseTestConfigFile = String.format("test-common-%s.conf", testEnvironment);
-        final Config envSpecificBaseTestConfig = ConfigFactory.parseResourcesAnySyntax(envSpecificBaseTestConfigFile);
+        // required: an unknown environment name (e.g. the removed "docker-compose-postgres") must fail here with the
+        // file name instead of silently loading only test-common.conf — same as config.TestConfig does.
+        final Config envSpecificBaseTestConfig = ConfigFactory.parseResourcesAnySyntax(envSpecificBaseTestConfigFile,
+                ConfigParseOptions.defaults().setAllowMissing(false));
         LOG.debug("Environment specific base config: {}", envSpecificBaseTestConfig);
 
         final Config mergedBaseConfig = envSpecificBaseTestConfig.withFallback(baseConfig);
@@ -172,8 +175,10 @@ public class CommonTestConfig {
     }
 
     /**
-     * Returns the persistence backend Ditto runs against in this test environment, e.g. {@code "mongodb"} (default)
-     * or {@code "postgres"}.
+     * Returns the persistence backend Ditto runs against in this test environment: {@code "mongodb"} (default, from
+     * {@code test-common.conf}) or {@code "postgres"}. Select it per run with the JVM system property
+     * {@code -Dpersistence.backend=postgres}, which overrides the conf value because the config is loaded via
+     * {@link ConfigFactory#load(Config)} (system properties are its top layer).
      *
      * @return the persistence backend.
      */
@@ -248,10 +253,8 @@ public class CommonTestConfig {
     }
 
     public boolean isLocalOrDockerTestEnvironment() {
-        // prefix-match mirrors TestEnvironment.getForString: suffixed variants like "docker-compose-postgres"
-        // and "local-postgres" are docker-compose / local environments, too
-        return testEnvironment.startsWith(TEST_ENVIRONMENT_LOCAL)
-                || testEnvironment.startsWith(TEST_ENVIRONMENT_DOCKER_COMPOSE);
+        return TEST_ENVIRONMENT_LOCAL.equalsIgnoreCase(testEnvironment)
+                || TEST_ENVIRONMENT_DOCKER_COMPOSE.equalsIgnoreCase(testEnvironment);
     }
 
     public Optional<List<JsonSchemaVersion>> getSearchVersions() {
