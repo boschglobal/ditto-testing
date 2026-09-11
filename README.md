@@ -54,6 +54,60 @@ services after. A launch sequence could look like this:
 Or, simply make use of the [multirun plugin](https://plugins.jetbrains.com/plugin/7248-multirun) for which a 
 [run configuration](intelliJRunConfigurations/Ditto4test.run.xml) also is available.
 
+### Run the tests
+
+Where the tests run depends on how Ditto was started. The test JVM and Ditto must agree on the hostnames of
+the stack: the tests request their tokens from the OAuth mock, the mock issues them under the host name it
+was called by, and the gateway accepts only its configured issuer AND fetches the signing keys from that
+same name. A dockerized gateway trusts `oauth:9900/ditto`, a host-run test JVM gets tokens issued by
+`localhost:9900/ditto` — mixing the two yields `401 gateway:jwt.issuer.notsupported`.
+
+**Ditto as a docker stack (`docker/start.sh`): run Maven in a container on the compose network.** This is
+the shape CI uses, needs no changes on the host and is not slower than a host run (the test time is spent
+waiting on Ditto, not in the test JVM). From the repository root:
+
+```bash
+docker run --rm --network test --network-alias system-test-container \
+  -v "$PWD":/ws -v "$HOME/.m2":/root/.m2 -w /ws maven:3.9-eclipse-temurin-25 \
+  mvn verify -am --projects=:system -Dtest.environment=docker-compose
+```
+
+* `--network test` is the compose network (`$DOCKER_NETWORK` if you changed it); the alias
+  `system-test-container` is the name the connectivity tests hand to Ditto for the test JVM's own HTTP and
+  Hono endpoints, so it is required.
+* Narrow the run with `-Dit.test=Class1,Class2` (failsafe — `-Dtest` selects nothing). The IT wrappers
+  `Mqtt3ConnectivityIT`/`KafkaConnectivityIT`/`HttpPushConnectivityIT` swallow `Class#method` filters;
+  target the `*Suite` classes for single methods.
+* Add `-Dpersistence.backend=postgres` when the stack was started with `DITTO_DB=postgres` (see below).
+  The tests are database-agnostic — they only talk to Ditto's public API — with one exception: `CleanupIT`
+  verifies the background cleanup by counting the journal events and snapshots left in the persistence
+  store, so it opens the database directly (`PersistenceInspector`, chosen by this property: `mongodb`
+  default, or `postgres`). Without the switch on a Postgres stack it inspects an empty MongoDB and fails;
+  every other test is unaffected by the property.
+* Run from the repository root (`-w /ws` above): `-am --projects=:system` builds `bom` and `common` in the
+  reactor. Resolved from `~/.m2` instead, their uninterpolated `${revision}` parent fails the build with
+  `Could not find artifact …:bom:pom:${revision}`.
+* `mvn verify` does not fail on IT failures (only failsafe's `integration-test` goal is bound). Read the
+  result from `system/target/failsafe-reports/*.txt` and require `Failures: 0, Errors: 0, Skipped: 0` —
+  a `Skipped` is a silent environment miss, not a pass. Delete the directory before a run to avoid reading
+  stale reports.
+
+**Ditto launched from IntelliJ: run Maven (or a JUnit run configuration) directly on the host** against the
+`local` environment, which addresses everything on `localhost` via the ports published by
+`docker/docker-compose.override.yml`:
+
+```bash
+mvn verify -am --projects=:system -Dtest.environment=local -Dit.test=Class1,Class2
+```
+
+`test.environment=local` is the default. The IntelliJ `Gateway for test` config runs devops-secured, so
+tests that use `/devops` (e.g. `CleanupIT`) additionally need
+`-Dgateway.devops.auth.enabled=true -Dgateway.devops.auth.password=foobar`.
+
+Running host-side Maven against a dockerized Ditto is **not** supported: besides the issuer mismatch above,
+the connectivity tests use one hostname both for their own broker clients and for the URIs they hand to
+Ditto, and a container cannot reach the host under `localhost`.
+
 ### Run Ditto on PostgreSQL persistence
 
 Ditto's persistence layer is pluggable, so the system tests can run against a Ditto stack that persists
