@@ -14,8 +14,15 @@ With `DITTO_DB=postgres` the [`docker-compose-postgres.yml`](docker-compose-post
 on the regular stack. things-search's backend is **selectable** via `SEARCH_BACKEND` (default `postgres`):
 `SEARCH_BACKEND=postgres` additionally layers [`docker-compose-postgres-search.yml`](docker-compose-postgres-search.yml)
 so **things-search runs on PostgreSQL** too; `SEARCH_BACKEND=mongodb` keeps its index in MongoDB (the proven
-persistence-on-PG / search-on-Mongo split). `SEARCH_BACKEND` is ignored in mongodb mode. Either way the
-`mongodb` container stays defined — do not remove it or the `MONGO_DB_*` variables from `docker-compose.env`.
+persistence-on-PG / search-on-Mongo split). `SEARCH_BACKEND` is ignored in mongodb mode.
+
+**Only the database(s) in use are started:** `DITTO_DB=postgres` starts `postgres` alone; the `mongodb`
+container is added solely with `SEARCH_BACKEND=mongodb` (and, as before, `DITTO_DB=mongodb` starts only
+`mongodb`). The base `docker-compose.yml` declares `depends_on: [mongodb]` on every Ditto service and compose
+merges those lists across `-f` files, so the Postgres overlays use the `!override` tag to *replace* each
+service's dependencies (`postgres` healthy + the Ditto services it needs) — otherwise `compose up <service>`
+would silently start MongoDB anyway. The `mongodb` service itself stays defined, and the `MONGO_DB_*`
+variables stay in `docker-compose.env`: do not remove either.
 
 > **Migration note.** `start-postgres.sh` / `stop-postgres.sh` are gone (use `DITTO_DB=postgres ./start.sh` /
 > `DITTO_DB=postgres ./stop.sh`), and so are the `docker-compose-postgres` / `local-postgres` test environments
@@ -73,8 +80,8 @@ DITTO_DB=postgres BUILD_IMAGES=1 DITTO_REPO_DIR=/path/to/ditto ./start.sh   # re
 In postgres mode the script assembles the compose stack explicitly (`docker-compose.yml`,
 `docker-compose.override.yml` **only if present** — CI deletes it — then `docker-compose-postgres.yml`, then
 `docker-compose-postgres-search.yml` when `SEARCH_BACKEND=postgres`), pulls only the third-party images
-(the Ditto images are local builds), starts PostgreSQL alongside MongoDB, waits for the Postgres
-healthcheck, then starts the Ditto services in the usual order. `postgres` is included in the log tailing
+(the Ditto images are local builds), starts PostgreSQL (plus MongoDB only when `SEARCH_BACKEND=mongodb`),
+waits for the Postgres healthcheck, then starts the Ditto services in the usual order. `postgres` is included in the log tailing
 (`postgres-<TAG>.log`) and in the container check. With `BUILD_IMAGES=1` it first fails fast if
 `DITTO_REPO_DIR` is not a worktree with the marker module or if the extension JAR has not been built, then
 runs `IMAGE_VERSION="$DITTO_VERSION" BAKE_POSTGRES_EXTENSIONS=true ./build-images.sh` there. `BUILD_IMAGES` is

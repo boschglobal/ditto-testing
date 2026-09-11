@@ -17,7 +17,9 @@
 #                      (+ the auto-loaded docker-compose.override.yml when present), everything on MongoDB.
 #   DITTO_DB=postgres  policies/things/connectivity persist to PostgreSQL (docker-compose-postgres.yml);
 #                      things-search runs on PostgreSQL too unless SEARCH_BACKEND=mongodb
-#                      (docker-compose-postgres-search.yml). See README-postgres.md.
+#                      (docker-compose-postgres-search.yml). Only the database(s) actually used are
+#                      started: postgres alone, plus mongodb only with SEARCH_BACKEND=mongodb.
+#                      See README-postgres.md.
 # Postgres-mode environment:
 #   SEARCH_BACKEND   "postgres" (default) | "mongodb": backend of things-search.
 #   BUILD_IMAGES     set to 1 to (re)build the Ditto service images with the Postgres extension JARs
@@ -56,12 +58,19 @@ case "$DITTO_DB" in
     fi
     COMPOSE_FILES+=(-f "$COMPOSE_STEM-postgres.yml")
 
+    # Start ONLY the database(s) in use: postgres always, mongodb solely for things-search-on-Mongo.
+    # (The overlays replace the services' `depends_on: [mongodb]` with `!override`, so `compose up
+    # <service>` does not pull mongodb in behind our back either.)
+    DB_SERVICES=(postgres)
+    DB_LABEL="PostgreSQL"
     SEARCH_BACKEND="${SEARCH_BACKEND:-postgres}"
     case "$SEARCH_BACKEND" in
       postgres)
         COMPOSE_FILES+=(-f "$COMPOSE_STEM-postgres-search.yml")
         ;;
       mongodb)
+        DB_SERVICES+=(mongodb)
+        DB_LABEL="PostgreSQL and MongoDB (things-search)"
         ;;
       *)
         printf "ERROR: SEARCH_BACKEND=<%s> is invalid; expected 'postgres' or 'mongodb'.\n" "$SEARCH_BACKEND" >&2
@@ -74,9 +83,7 @@ case "$DITTO_DB" in
     # eclipse/ditto-<svc>:$IMAGE_VERSION, 0-SNAPSHOT by default), so never pull them: only the third-party images.
     export DITTO_VERSION="${DITTO_VERSION:-0-SNAPSHOT}"
     export DOCKER_REGISTRY_NAMESPACE="${DOCKER_REGISTRY_NAMESPACE:-eclipse}"
-    PULL_SERVICES=(postgres mongodb oauth ssh mqtt kafka rabbitmq artemis fluentbit)
-    DB_SERVICES=(postgres mongodb)
-    DB_LABEL="PostgreSQL and MongoDB"
+    PULL_SERVICES=("${DB_SERVICES[@]}" oauth ssh mqtt kafka rabbitmq artemis fluentbit)
     ;;
   *)
     printf "ERROR: DITTO_DB=<%s> is invalid; expected 'mongodb' or 'postgres'.\n" "$DITTO_DB" >&2
@@ -143,21 +150,67 @@ function wait_for_postgres {
 # /opt/ditto/extensions/ inside the image). Check that BEFORE starting anything: with an unbaked image the
 # overlays' `include required(classpath(...))` only surfaces in the container log once the stack is up.
 # Only `docker image` / `docker run` are used here (CI's sed rewrites the compose command name only).
+# On failure the full explanation is printed LAST (after the compose warnings, which cannot be silenced
+# from here) so it is the first thing the reader sees when scrolling up from the prompt.
 function check_service_images {
-  local svc image
+  local svc image missing=() unbaked=()
   for svc in policies things things-search connectivity; do
     image="${DOCKER_REGISTRY:-docker.io}/${DOCKER_REGISTRY_NAMESPACE}/${DITTO_SERVICE_PREFIX-ditto-}${svc}:${DITTO_VERSION}"
     if ! docker image inspect "$image" >/dev/null 2>&1; then
-      printf "ERROR: image <%s> not found locally.\n" "$image" >&2
-      printf "Build it with BAKE_POSTGRES_EXTENSIONS=true ./build-images.sh in the ditto worktree (or BUILD_IMAGES=1 here), see README-postgres.md.\n" >&2
-      return 1
-    fi
-    if ! docker run --rm --entrypoint sh "$image" -c 'ls /opt/ditto/extensions/ditto-postgres-client-extension-*.jar >/dev/null 2>&1'; then
-      printf "ERROR: image <%s> has no Postgres extension JARs in /opt/ditto/extensions/ (built without BAKE_POSTGRES_EXTENSIONS=true).\n" "$image" >&2
-      printf "Rebuild it with BAKE_POSTGRES_EXTENSIONS=true ./build-images.sh (or BUILD_IMAGES=1 here), see README-postgres.md.\n" >&2
-      return 1
+      missing+=("$image")
+    elif ! docker run --rm --entrypoint sh "$image" -c 'ls /opt/ditto/extensions/ditto-postgres-client-extension-*.jar >/dev/null 2>&1'; then
+      unbaked+=("$image")
     fi
   done
+  if [ "${#missing[@]}" -eq 0 ] && [ "${#unbaked[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  {
+    printf "\n"
+    printf "=====================================================================================\n"
+    printf " start.sh ABORTED before starting anything: DITTO_DB=postgres needs local Ditto images\n"
+    printf "=====================================================================================\n"
+    printf "\n"
+    printf "In postgres mode the Ditto service images are NEVER pulled from a registry: they must be\n"
+    printf "built locally from a ditto worktree that contains the PostgreSQL extensions, with the\n"
+    printf "extension JARs baked into /opt/ditto/extensions/ (BAKE_POSTGRES_EXTENSIONS=true).\n"
+    printf "Only the third-party images (postgres, mongodb, brokers, ...) are pulled.\n"
+    printf "\n"
+    printf "Expected image names (DOCKER_REGISTRY=%s, DOCKER_REGISTRY_NAMESPACE=%s, DITTO_VERSION=%s):\n" \
+      "${DOCKER_REGISTRY:-docker.io}" "$DOCKER_REGISTRY_NAMESPACE" "$DITTO_VERSION"
+    if [ "${#missing[@]}" -gt 0 ]; then
+      printf "\n  NOT FOUND locally (was it never built, or removed by a docker prune / cleanup?):\n"
+      printf "    - %s\n" "${missing[@]}"
+    fi
+    if [ "${#unbaked[@]}" -gt 0 ]; then
+      printf "\n  FOUND, but built WITHOUT the Postgres extension JARs (no /opt/ditto/extensions/*.jar):\n"
+      printf "    - %s\n" "${unbaked[@]}"
+    fi
+    printf "\n"
+    printf "How to fix (pick one):\n"
+    printf "\n"
+    printf "  a) Build the images in a ditto worktree on the feat/postgres-persistance-search branch\n"
+    printf "     (or any branch containing internal/utils/postgres-persistence-extension):\n"
+    printf "\n"
+    printf "       cd /path/to/ditto\n"
+    printf "       mvn install -DskipTests                       # skip if the JARs are already built\n"
+    printf "       BAKE_POSTGRES_EXTENSIONS=true ./build-images.sh\n"
+    printf "\n"
+    printf "     Prefix IMAGE_VERSION=%s if you overrode DITTO_VERSION.\n" "$DITTO_VERSION"
+    printf "\n"
+    printf "  b) Let this script build them from an already-compiled ditto worktree:\n"
+    printf "\n"
+    printf "       DITTO_DB=postgres BUILD_IMAGES=1 DITTO_REPO_DIR=/path/to/ditto ./start.sh\n"
+    printf "\n"
+    printf "  c) If the images exist under another tag or namespace, point the script at them:\n"
+    printf "\n"
+    printf "       DITTO_DB=postgres DITTO_VERSION=<tag> DOCKER_REGISTRY_NAMESPACE=<ns> ./start.sh\n"
+    printf "\n"
+    printf "Details: docker/README-postgres.md (section \"Prerequisites\").\n"
+    printf "\n"
+  } >&2
+  return 1
 }
 
 # shellcheck disable=SC2317  # the trailing `} || {` handler is kept as in upstream start.sh
@@ -171,8 +224,9 @@ function check_service_images {
   fi
 
   if [ "$DITTO_DB" = "postgres" ]; then
-    (check_service_images)
-    assert_success $?
+    # Nothing has been started yet (cleanup ran above), so a plain exit is enough: assert_success's
+    # extra `compose down` would only bury the explanation under another page of compose warnings.
+    (check_service_images) || exit 1
   fi
 
   printf "\nPulling newest versions of images ...\n\n"
@@ -223,10 +277,9 @@ function check_service_images {
   TAG="${TAG:-$(date -Iseconds)}"
   printf "\nAppend container logs to files...\n\n"
   compose logs -f oauth &> "oauth-$TAG.log" &
-  if [ "$DITTO_DB" = "postgres" ]; then
-    compose logs -f postgres &> "postgres-$TAG.log" &
-  fi
-  compose logs -f mongodb &> "mongodb-$TAG.log" &
+  for DB_SERVICE in "${DB_SERVICES[@]}"; do
+    compose logs -f "$DB_SERVICE" &> "$DB_SERVICE-$TAG.log" &
+  done
   compose logs -f ssh &> "ssh-$TAG.log" &
   compose logs -f mqtt &> "mqtt-$TAG.log" &
   compose logs -f kafka &> "kafka-$TAG.log" &

@@ -26,8 +26,8 @@
 #
 # things-search's backend is SELECTABLE, not fixed: by default (SEARCH_BACKEND=postgres) it runs on
 # PostgreSQL via the docker-compose-postgres-search.yml overlay (layered after this file); with
-# SEARCH_BACKEND=mongodb it keeps indexing in MongoDB and only this file is used. Either way MongoDB
-# stays defined (see the mongodb note below).
+# SEARCH_BACKEND=mongodb it keeps indexing in MongoDB and only this file is used. MongoDB stays defined
+# but is only started in that case (see the mongodb note below).
 #
 # The host port for psql debugging lives in docker-compose.override.yml (deleted by CI), so CI binds no
 # host port for postgres.
@@ -54,15 +54,17 @@ services:
       timeout: 5s
       retries: 10
 
-  # mongodb stays exactly as defined in docker-compose.yml. It is REQUIRED when SEARCH_BACKEND=mongodb
-  # (things-search indexes there) and harmless when SEARCH_BACKEND=postgres (nothing uses it, but the
-  # container is cheap and keeps this file backend-agnostic). The shared docker-compose.env
-  # (MONGO_DB_HOSTNAME etc.) is intentionally still injected into the three Postgres-backed services
-  # below: harmless there (their Mongo config resolves but the Postgres provider ignores it) — do NOT
-  # "clean it up".
+  # mongodb stays DEFINED exactly as in docker-compose.yml but is NOT STARTED in postgres mode unless
+  # SEARCH_BACKEND=mongodb (things-search indexes there; start.sh then adds it to the DB services).
+  # docker-compose.yml declares `depends_on: [mongodb]` on policies/things/connectivity, and compose MERGES
+  # depends_on across -f files, so a plain overlay would still drag the mongodb container up with every
+  # service. The `!override` tag below therefore REPLACES the dependency list of each Postgres-backed
+  # service (postgres healthy + the Ditto services it needs) instead of extending it. The shared
+  # docker-compose.env (MONGO_DB_HOSTNAME etc.) is intentionally still injected into the three services:
+  # harmless (their Mongo config resolves but the Postgres provider ignores it) — do NOT "clean it up".
 
   policies:
-    depends_on:
+    depends_on: !override
       postgres:
         condition: service_healthy
     volumes:
@@ -78,9 +80,11 @@ services:
       - POSTGRES_SSL_MODE=disable
 
   things:
-    depends_on:
+    depends_on: !override
       postgres:
         condition: service_healthy
+      policies:
+        condition: service_started
     volumes:
       - ./postgres/things-postgres.conf:/opt/ditto/things-postgres.conf:ro
     environment:
@@ -94,9 +98,11 @@ services:
       - POSTGRES_SSL_MODE=disable
 
   connectivity:
-    depends_on:
+    depends_on: !override
       postgres:
         condition: service_healthy
+      policies:
+        condition: service_started
     volumes:
       - ./postgres/connectivity-postgres.conf:/opt/ditto/connectivity-postgres.conf:ro
     environment:

@@ -30,9 +30,15 @@ version: "2.4"
 services:
 
   things-search:
-    depends_on:
+    # `!override` REPLACES docker-compose.yml's `depends_on: [mongodb, policies, things]` (compose would
+    # otherwise merge the lists and still start mongodb): on PostgreSQL things-search needs no MongoDB.
+    depends_on: !override
       postgres:
         condition: service_healthy
+      policies:
+        condition: service_started
+      things:
+        condition: service_started
     volumes:
       - ./postgres/search-postgres.conf:/opt/ditto/search-postgres.conf:ro
     environment:
